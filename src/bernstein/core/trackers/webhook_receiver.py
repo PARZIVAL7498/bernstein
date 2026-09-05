@@ -52,6 +52,12 @@ if TYPE_CHECKING:
 
 from bernstein.core.security.sanitize import sanitize_log
 from bernstein.core.trackers.contract import RateLimited, RoutingHint, Ticket
+from bernstein.core.trackers.event_catalogue import (
+    UNMAPPED_ACTION,
+    UNMAPPED_TYPE,
+    ResolvedSourceEvent,
+    get_event_catalogue,
+)
 from bernstein.core.webhook_signatures import verify_hmac_sha256
 
 logger = logging.getLogger(__name__)
@@ -72,12 +78,19 @@ class TrackerEvent:
 
     Attributes:
         adapter: Short adapter name (``jira_cloud``, ``github``, ...).
-        action: Event action (``created``, ``updated``, ``transitioned``).
+        action: Canonical action from the event catalogue
+            (``created``, ``updated``, ``transitioned``, ``commented``,
+            or ``unmapped``).
         ticket: Normalised ticket payload.
         delivery_id: Stable per-delivery identifier used for replay
             protection.  Falls back to a hash of the raw body when the
             tracker does not send one.
         received_ts: Unix seconds the receiver accepted the event.
+        canonical_type: Catalogue canonical type (``issue``,
+            ``issue_comment``, ``unmapped``, ...).
+        catalogue_content_hash: SHA-256 of the catalogue document used
+            to classify this event; empty when the adapter does not map
+            through the catalogue.
     """
 
     adapter: str
@@ -85,6 +98,8 @@ class TrackerEvent:
     ticket: Ticket
     delivery_id: str
     received_ts: float = field(default_factory=time.time)
+    canonical_type: str = ""
+    catalogue_content_hash: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +210,20 @@ class ReplayLedger:
         with self._lock:
             return delivery_id in self._seen
 
-    def remember(self, delivery_id: str, *, ts: float | None = None) -> bool:
+    def remember(
+        self,
+        delivery_id: str,
+        *,
+        ts: float | None = None,
+        catalogue_content_hash: str | None = None,
+    ) -> bool:
         """Record ``delivery_id``.  Return ``True`` if it was new.
 
         The on-disk append is best-effort; failures log a warning but do
         not raise so a transient disk error does not surface as a 5xx to
-        the tracker.
+        the tracker.  When ``catalogue_content_hash`` is provided it is
+        persisted on the journal entry so a verifier can bind the
+        classification vocabulary used for that delivery.
         """
 
         ts_value = float(ts if ts is not None else time.time())
@@ -215,8 +238,11 @@ class ReplayLedger:
         if self._path is not None:
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
+                entry: dict[str, Any] = {"delivery_id": delivery_id, "ts": ts_value}
+                if catalogue_content_hash:
+                    entry["catalogue_content_hash"] = catalogue_content_hash
                 with self._path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({"delivery_id": delivery_id, "ts": ts_value}) + "\n")
+                    fh.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
             except OSError as exc:
                 logger.warning("ReplayLedger: append failed for %s: %s", self._path, exc)
         return True
@@ -337,10 +363,35 @@ class WebhookReceiver:
 
         # Record only after successful parse so a flaky parser does not
         # poison the ledger and silently swallow legitimate retries.
-        self._ledger.remember(delivery_id)
+        # Every ingest journal entry records the catalogue content hash so
+        # a verifier can bind the classification vocabulary in force.
+        self._ledger.remember(
+            delivery_id,
+            catalogue_content_hash=get_event_catalogue().content_hash,
+        )
 
         if event is None:
             return ReceiveResult(status="ignored", delivery_id=delivery_id)
+
+        if event.canonical_type == UNMAPPED_TYPE or event.action == UNMAPPED_ACTION:
+            canonical_unmapped = (
+                event
+                if event.delivery_id == delivery_id
+                else TrackerEvent(
+                    adapter=event.adapter,
+                    action=UNMAPPED_ACTION,
+                    ticket=event.ticket,
+                    delivery_id=delivery_id,
+                    received_ts=event.received_ts,
+                    canonical_type=UNMAPPED_TYPE,
+                    catalogue_content_hash=event.catalogue_content_hash or get_event_catalogue().content_hash,
+                )
+            )
+            return ReceiveResult(
+                status="unmapped",
+                delivery_id=delivery_id,
+                event=canonical_unmapped,
+            )
 
         # Parsers populate a best-effort delivery_id from header lookups
         # but the receiver-side derivation is the source of truth.
@@ -353,6 +404,8 @@ class WebhookReceiver:
                 ticket=event.ticket,
                 delivery_id=delivery_id,
                 received_ts=event.received_ts,
+                canonical_type=event.canonical_type,
+                catalogue_content_hash=event.catalogue_content_hash,
             )
         )
         return ReceiveResult(status="accepted", delivery_id=delivery_id, event=canonical_event)
@@ -467,10 +520,74 @@ def _github_delivery_id(headers: dict[str, str], body: bytes) -> str:
     return f"github:{_body_hash(body)}"
 
 
+def _empty_ticket() -> Ticket:
+    """Minimal ticket used when classifying an unmapped source event."""
+
+    return Ticket(id="", external_url="", title="", body="", status="", labels=())
+
+
+def _unmapped_tracker_event(
+    *,
+    adapter: str,
+    delivery_id: str,
+    resolved: ResolvedSourceEvent,
+) -> TrackerEvent:
+    """Build the explicit unmapped marker event for an unknown source name."""
+
+    return TrackerEvent(
+        adapter=adapter,
+        action=UNMAPPED_ACTION,
+        ticket=_empty_ticket(),
+        delivery_id=delivery_id,
+        canonical_type=UNMAPPED_TYPE,
+        catalogue_content_hash=resolved.catalogue_content_hash,
+    )
+
+
+def _normalise_action(raw: str, *, fallback: str = "updated") -> str:
+    """Map a source action string onto the catalogue action vocabulary."""
+
+    catalogue = get_event_catalogue()
+    candidate = (raw or fallback).strip().lower()
+    # Common tracker verbs → catalogue actions.
+    aliases = {
+        "opened": "created",
+        "open": "created",
+        "reopened": "updated",
+        "closed": "transitioned",
+        "close": "transitioned",
+        "created": "created",
+        "updated": "updated",
+        "edited": "updated",
+        "labeled": "updated",
+        "unlabeled": "updated",
+        "assigned": "updated",
+        "unassigned": "updated",
+        "synchronize": "updated",
+        "ready_for_review": "updated",
+        "converted_to_draft": "updated",
+        "review_requested": "updated",
+        "review_request_removed": "updated",
+        "commented": "commented",
+        "create": "created",
+        "update": "updated",
+    }
+    mapped = aliases.get(candidate, candidate)
+    if catalogue.is_canonical_action(mapped):
+        return mapped
+    return fallback if catalogue.is_canonical_action(fallback) else "updated"
+
+
 def _github_parse(headers: dict[str, str], payload: dict[str, Any]) -> TrackerEvent | None:
     event_type = _header(headers, "x-github-event") or "unknown"
-    if event_type not in {"issues", "issue_comment", "pull_request"}:
-        return None
+    resolved = get_event_catalogue().resolve("github", event_type)
+    delivery_id = _github_delivery_id(headers, b"")
+    if resolved.is_unmapped:
+        return _unmapped_tracker_event(
+            adapter="github",
+            delivery_id=delivery_id,
+            resolved=resolved,
+        )
     issue = payload.get("issue") or payload.get("pull_request") or {}
     if not issue:
         return None
@@ -501,9 +618,11 @@ def _github_parse(headers: dict[str, str], payload: dict[str, Any]) -> TrackerEv
     )
     return TrackerEvent(
         adapter="github",
-        action=str(payload.get("action") or event_type),
+        action=_normalise_action(str(payload.get("action") or ""), fallback="updated"),
         ticket=ticket,
-        delivery_id=_github_delivery_id(headers, b""),
+        delivery_id=delivery_id,
+        canonical_type=resolved.canonical_type,
+        catalogue_content_hash=resolved.catalogue_content_hash,
     )
 
 
@@ -529,10 +648,18 @@ def _gitlab_delivery_id(headers: dict[str, str], body: bytes) -> str:
 
 def _gitlab_parse(headers: dict[str, str], payload: dict[str, Any]) -> TrackerEvent | None:
     kind = str(payload.get("object_kind") or "")
-    if kind not in {"issue", "note"}:
-        return None
+    resolved = get_event_catalogue().resolve("gitlab", kind)
+    delivery_id = _gitlab_delivery_id(headers, b"")
+    if resolved.is_unmapped:
+        return _unmapped_tracker_event(
+            adapter="gitlab",
+            delivery_id=delivery_id,
+            resolved=resolved,
+        )
     attrs = payload.get("object_attributes") or {}
-    if kind == "note":
+    # Extract shape comes from the catalogue so parsers never branch on the
+    # raw source event-name string.
+    if resolved.extract == "nested_issue":
         issue_obj = payload.get("issue") or {}
         if not issue_obj:
             return None
@@ -558,11 +685,14 @@ def _gitlab_parse(headers: dict[str, str], payload: dict[str, Any]) -> TrackerEv
         labels=labels,
         raw={"project": project_path, "iid": iid},
     )
+    action_fallback = "commented" if resolved.extract == "nested_issue" else "updated"
     return TrackerEvent(
         adapter="gitlab",
-        action=str(attrs.get("action") or kind),
+        action=_normalise_action(str(attrs.get("action") or ""), fallback=action_fallback),
         ticket=ticket,
-        delivery_id=_gitlab_delivery_id(headers, b""),
+        delivery_id=delivery_id,
+        canonical_type=resolved.canonical_type,
+        catalogue_content_hash=resolved.catalogue_content_hash,
     )
 
 

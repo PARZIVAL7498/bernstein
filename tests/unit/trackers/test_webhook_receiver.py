@@ -211,7 +211,7 @@ def test_github_bad_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.status == "bad_payload"
 
 
-def test_github_ignores_unhandled_event(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_github_unmapped_event_is_visible(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_WH_SECRET", "shh")
     receiver = _make_receiver("github")
     body = json.dumps({"action": "completed"}).encode("utf-8")
@@ -221,7 +221,10 @@ def test_github_ignores_unhandled_event(monkeypatch: pytest.MonkeyPatch) -> None
         "x-github-delivery": "skip-1",
     }
     result = receiver.receive("github", headers, body)
-    assert result.status == "ignored"
+    assert result.status == "unmapped"
+    assert result.event is not None
+    assert result.event.action == "unmapped"
+    assert result.event.canonical_type == "unmapped"
 
 
 # ---------------------------------------------------------------------------

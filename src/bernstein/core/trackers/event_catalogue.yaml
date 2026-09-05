@@ -1,0 +1,44 @@
+# Canonical tracker-ingest event-type catalogue.
+#
+# Source adapters map raw webhook event names through this file only.
+# Parsers must not compare source event-name string literals in code.
+# Unknown source events resolve to the explicit ``unmapped`` canonical type.
+
+schema_version: 1
+
+canonical_types:
+  - id: issue
+    description: Issue or pull-request lifecycle event
+  - id: issue_comment
+    description: Comment on an issue or pull request
+  - id: unmapped
+    description: Explicit bucket for source events with no catalogue entry
+
+canonical_actions:
+  - created
+  - updated
+  - transitioned
+  - commented
+  - unmapped
+
+# Per-adapter map: source event name → canonical type (+ optional extract shape).
+# ``extract`` tells the parser how to read the payload without branching on
+# the raw source event name string.
+mappings:
+  github:
+    issues:
+      canonical_type: issue
+      extract: issue_or_pr
+    issue_comment:
+      canonical_type: issue_comment
+      extract: issue_or_pr
+    pull_request:
+      canonical_type: issue
+      extract: issue_or_pr
+  gitlab:
+    issue:
+      canonical_type: issue
+      extract: object_attributes
+    note:
+      canonical_type: issue_comment
+      extract: nested_issue

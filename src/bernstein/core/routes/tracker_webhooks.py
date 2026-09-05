@@ -68,7 +68,7 @@ def _status_to_response(result: ReceiveResult) -> JSONResponse:
     body = {"status": result.status, "delivery_id": result.delivery_id}
     if result.status == "accepted":
         return JSONResponse(status_code=200, content=body)
-    if result.status in {"replay", "ignored"}:
+    if result.status in {"replay", "ignored", "unmapped"}:
         return JSONResponse(status_code=200, content=body)
     if result.status == "unknown_adapter":
         return JSONResponse(status_code=404, content=body)
