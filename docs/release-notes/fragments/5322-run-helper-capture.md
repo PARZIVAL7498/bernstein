@@ -16,4 +16,4 @@ file appends a `run_helper_captured` row naming it in the run receipt.
 Capture happens after the reap event is recorded and before the directory is
 removed, and it is best-effort: a failure to capture never blocks collection, so
 a full disk or an unreadable file costs the artefact rather than the sweep. A
-dry run captures nothing and reports what it would have taken.
+dry run captures nothing and reports what it would have taken (#5322).

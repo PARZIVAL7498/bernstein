@@ -275,10 +275,10 @@ def capture_helpers_before_reap(
     cas = CASStore(sdd_dir / "cas")
     journal = None
     try:
-        from bernstein.core.replay.journal import EventJournal
+        from bernstein.core.replay.journal import EventJournal, JournalPathError
 
         journal = EventJournal.resume(run_id, sdd_dir)
-    except Exception as exc:  # boundary
+    except (JournalPathError, OSError) as exc:  # boundary: missing / unreadable journal
         logger.debug("run_helper: no journal to name helpers for run %s: %s", run_id, exc)
     try:
         return capture_run_helpers(worktree_path, helpers, cas, journal=journal)
