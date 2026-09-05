@@ -102,6 +102,21 @@ type is recorded in `PollSweepResult.errors` and the sweep continues;
 `deadline_s` bounds the whole sweep so a single hung source cannot
 starve the ones behind it.
 
+## Event-type catalogue
+
+GitHub and GitLab webhook parsers classify source event names through a
+schema-validated catalogue
+(`src/bernstein/core/trackers/event_catalogue.yaml`), not by comparing
+string literals in code. The catalogue is loaded and validated at
+process start. Unknown source events resolve to an explicit `unmapped`
+canonical type, are counted, and return HTTP 200 with
+`status: unmapped` so the tracker does not retry — while remaining
+visible in the unmapped counter and the replay journal.
+
+Every replay-journal entry records `catalogue_content_hash` (SHA-256 of
+the catalogue's canonical JSON form) so a verifier can bind the
+vocabulary that classified that delivery.
+
 ## Reverse-proxy setup
 
 Most trackers require an HTTPS endpoint. Two patterns work today:

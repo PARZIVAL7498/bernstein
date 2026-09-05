@@ -459,6 +459,10 @@ artifacts = [
     # firewall loads them at startup to validate every incoming MCP tool
     # call. Loader: bernstein.mcp.input_validation.load_registry.
     "src/bernstein/mcp/tool_schemas/*.json",
+    # Tracker ingest event-type catalogue (issue #5132). Source webhook
+    # event names map through this schema-validated YAML only. Loader:
+    # bernstein.core.trackers.event_catalogue.load_event_catalogue.
+    "src/bernstein/core/trackers/event_catalogue.yaml",
     # Doctor doc-suggestion seed list. Curated list of common documentation
     # gaps surfaced by `bernstein doctor --suggest-docs`. Operator refreshes
     # it on each release. Loader:
