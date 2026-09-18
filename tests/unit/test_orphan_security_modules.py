@@ -61,7 +61,6 @@ _REMOVE_BY_REASON_RE = re.compile(r"^remove-by:(\d{4}-\d{2}-\d{2})$")
 # Everything else is triaged for removal by 2026-12-01 (v4.0.0 window)
 # rather than left as an unowned freezer entry.
 KNOWN_ORPHAN_REASONS: dict[str, str] = {
-    "audit_export": "remove-by:2026-12-01",
     "authzen": "#4912",
     "capability_delta": "remove-by:2026-12-01",
     "claude_permission_profiles": "remove-by:2026-12-01",
