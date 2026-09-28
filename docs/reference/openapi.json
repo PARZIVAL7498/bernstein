@@ -8242,9 +8242,9 @@
         "tags": [
           "governance"
         ],
-        "summary": "Verify Receipt",
+        "summary": "Verify Receipt Endpoint",
         "description": "Verify the posted receipt file and return the verdict document.\n\nThe request body is the receipt verbatim -- whatever the operator dropped,\nof whatever content type. Nothing under ``.sdd`` and no key material is\nread: the verifier works from the file's own bytes, so this endpoint\nanswers about the upload and not about the installation serving it.\n\nThe status is always 200 for a request that carried a body. A tampered\nreceipt, a file that is not a receipt, and an empty drop are all verdicts\nabout the evidence rather than failed requests, and each is the answer an\noperator dropped the file to get.\n\nNo key can be pinned through this endpoint, so the pass it reports is\nalways the integrity-only tier and always carries the caveat saying so.\nA key arriving in the same request as the receipt is not an out-of-band\nanchor -- it is the same channel, and treating it as one would report\nprovenance on the strength of the upload rather than of any evidence.",
-        "operationId": "verify_receipt_governance_verify_receipt_post",
+        "operationId": "verify_receipt_endpoint_governance_verify_receipt_post",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -17407,9 +17407,9 @@
         "tags": [
           "governance"
         ],
-        "summary": "Verify Receipt",
+        "summary": "Verify Receipt Endpoint",
         "description": "Verify the posted receipt file and return the verdict document.\n\nThe request body is the receipt verbatim -- whatever the operator dropped,\nof whatever content type. Nothing under ``.sdd`` and no key material is\nread: the verifier works from the file's own bytes, so this endpoint\nanswers about the upload and not about the installation serving it.\n\nThe status is always 200 for a request that carried a body. A tampered\nreceipt, a file that is not a receipt, and an empty drop are all verdicts\nabout the evidence rather than failed requests, and each is the answer an\noperator dropped the file to get.\n\nNo key can be pinned through this endpoint, so the pass it reports is\nalways the integrity-only tier and always carries the caveat saying so.\nA key arriving in the same request as the receipt is not an out-of-band\nanchor -- it is the same channel, and treating it as one would report\nprovenance on the strength of the upload rather than of any evidence.",
-        "operationId": "verify_receipt_api_v1_governance_verify_receipt_post",
+        "operationId": "verify_receipt_endpoint_api_v1_governance_verify_receipt_post",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -22321,11 +22321,50 @@
               }
             ],
             "title": "Model"
+          },
+          "cli": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cli"
+          },
+          "meta_messages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta Messages"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
           }
         },
         "type": "object",
         "title": "TaskPatchRequest",
-        "description": "Body for PATCH /tasks/{task_id} - manager corrections."
+        "description": "Body for PATCH /tasks/{task_id} - manager corrections.\n\n``meta_messages``, ``metadata``, and ``cli`` carry an evidence-gated\nescalation hop (issue #4855): the context line, the persisted ladder\nstep, and the step's adapter. ``model`` is the step's model id,\nunmodified."
       },
       "TaskProgressRequest": {
         "properties": {
